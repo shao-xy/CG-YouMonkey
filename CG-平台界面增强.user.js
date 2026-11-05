@@ -169,6 +169,10 @@ body.cg-ui #menu .dropdown-item:hover { background: var(--cg-t-soft); color: var
 body.cg-ui #menu .dropdown-item i { width: 1.2em; display: inline-block; }
 body.cg-ui .cg-topbar-hidden { display: none !important; }
 
+/* 顶栏整体移除：课程选择与个人信息已合并到下方大菜单栏 */
+body.cg-ui #menu { display: none !important; }
+body.cg-ui iframe[name="topmain"] { height: 100% !important; }
+
 /* ================= 大菜单栏（tabs.jsp） ================= */
 body.cg-ui .anjing-box {
   background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
@@ -243,7 +247,8 @@ body.cg-ui .cg-panel {
   z-index: 1200;
   min-width: 220px;
   max-width: 460px;
-  max-height: 68vh;
+  /* 大菜单栏所在 iframe 的视口仅 65px 高，此处不能用 vh，否则面板会被压扁裁掉 */
+  max-height: 340px;
   overflow-y: auto;
   background: var(--cg-card);
   border: 1px solid var(--cg-line);
@@ -332,7 +337,8 @@ body.cg-ui .cg-temp-x {
   border: 1.5px solid #fff;
   z-index: 5;
 }
-body.cg-ui .nav-link.cg-temp-wrap:hover .cg-temp-x { display: block; }
+body.cg-ui .nav-link.cg-temp-wrap:hover .cg-temp-x,
+body.cg-ui .sidebar .menu-item:hover .cg-temp-x { display: block; }
 
 /* 个人信息 */
 body.cg-ui .cg-user-wrap { position: relative; margin-left: auto; flex: 0 0 auto; }
@@ -365,9 +371,29 @@ body.cg-ui .sidebar .section-title {
   padding: 0 16px 6px;
   letter-spacing: .6px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+body.cg-ui .cg-group-x {
+  margin-left: auto;
+  width: 15px;
+  height: 15px;
+  line-height: 13px;
+  text-align: center;
+  border-radius: 50%;
+  background: #eef1f6;
+  color: #9aa3b2;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all .14s;
+}
+body.cg-ui .sidebar .section-title:hover .cg-group-x { opacity: 1; }
+body.cg-ui .cg-group-x:hover { background: #ef4444; color: #fff; }
 body.cg-ui .sidebar .menu-list { margin-bottom: 14px; }
 body.cg-ui .sidebar .menu-item {
+  position: relative;
   border-radius: 9px;
   margin: 1px 8px;
   padding: 9px 12px;
@@ -417,11 +443,13 @@ body.cg-ui .cg-sb-group-title .cg-sb-group-act {
 body.cg-ui .cg-sb-group-title .cg-sb-group-act:hover { color: var(--cg-t); border-color: var(--cg-t); }
 
 /* 拖拽 */
-body.cg-ui .cg-dragging { opacity: .45; }
-body.cg-ui .cg-drop-hint {
-  outline: 2px dashed color-mix(in srgb, var(--cg-t) 55%, transparent);
-  outline-offset: -2px;
+body.cg-ui .cg-dragging { opacity: .4; }
+body.cg-ui .cg-placeholder {
+  border: 2px dashed color-mix(in srgb, var(--cg-t) 48%, transparent);
   border-radius: 9px;
+  background: color-mix(in srgb, var(--cg-t) 7%, transparent);
+  margin: 0;
+  box-sizing: border-box;
 }
 
 /* ================= 内容页视觉优化 ================= */
@@ -515,52 +543,94 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
 
   /**
    * 让容器内的子元素可拖动排序。
+   * 拖动时源元素隐藏、同位置留下等高占位符，光标落在哪个条目上，
+   * 占位符就移到该条目的位置，因此整个条目高度都是有效拖动区。
    * @param {HTMLElement} container 容器
    * @param {string} itemSelector 可拖动子元素选择器（不可使用 :scope，closest 不支持）
    * @param {Function} onEnd 排序结束回调
    */
   function enableSortable(container, itemSelector, onEnd) {
     let dragging = null;
+    let placeholder = null;
+
+    function candidates() {
+      return Array.prototype.slice.call(container.children).filter(function (n) {
+        return n !== dragging && n !== placeholder && n.matches(itemSelector);
+      });
+    }
 
     container.addEventListener('dragstart', function (e) {
       const item = e.target.closest(itemSelector);
       if (!item || !container.contains(item)) return;
+
       dragging = item;
+      const rect = item.getBoundingClientRect();
+
+      // 占位符与源元素等高，补偿其隐藏后的空间，布局保持稳定
+      placeholder = document.createElement(item.tagName);
+      placeholder.className = 'cg-placeholder';
+      placeholder.style.height = rect.height + 'px';
+      placeholder.style.pointerEvents = 'none';
+      item.parentNode.insertBefore(placeholder, item);
+
       item.classList.add('cg-dragging');
+      item.style.display = 'none';
+
       e.dataTransfer.effectAllowed = 'move';
       try { e.dataTransfer.setData('text/plain', ''); } catch (err) { /* 忽略 */ }
     });
 
-    container.addEventListener('dragend', function () {
-      if (dragging) dragging.classList.remove('cg-dragging');
-      dragging = null;
-      $$('.cg-drop-hint', container).forEach((n) => n.classList.remove('cg-drop-hint'));
-      if (typeof onEnd === 'function') onEnd();
-    });
-
     container.addEventListener('dragover', function (e) {
-      if (!dragging) return;
+      if (!dragging || !placeholder) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
 
-      const items = $$(itemSelector, container).filter((n) => n !== dragging && n.parentElement === container);
-      let after = null;
-      for (const n of items) {
-        const box = n.getBoundingClientRect();
-        if (e.clientY < box.top + box.height / 2) { after = n; break; }
-      }
-      if (after) {
-        container.insertBefore(dragging, after);
+      const list = candidates();
+      if (!list.length) return;
+
+      // 优先用光标所在元素判定，落点即目标条目的位置
+      let target = null;
+      const hovered = e.target && e.target.closest ? e.target.closest(itemSelector) : null;
+      if (hovered && list.indexOf(hovered) !== -1) {
+        target = hovered;
       } else {
-        // 放到末尾时，需保持在「其它」等固定元素之前
-        const tail = container.querySelector(':scope > .cg-tail');
-        if (tail) container.insertBefore(dragging, tail);
-        else container.appendChild(dragging);
+        for (const n of list) {
+          const box = n.getBoundingClientRect();
+          if (e.clientY >= box.top && e.clientY <= box.bottom &&
+              e.clientX >= box.left && e.clientX <= box.right) {
+            target = n;
+            break;
+          }
+        }
+      }
+
+      // 占位符插到目标之后，落下时即与目标换位
+      if (target) {
+        if (placeholder.previousSibling !== target) {
+          container.insertBefore(placeholder, target.nextSibling);
+        }
+      } else {
+        const last = list[list.length - 1];
+        if (placeholder.previousSibling !== last) {
+          container.insertBefore(placeholder, last.nextSibling);
+        }
       }
     });
 
     container.addEventListener('drop', function (e) {
       if (dragging) e.preventDefault();
+    });
+
+    container.addEventListener('dragend', function () {
+      if (!dragging) return;
+      if (placeholder && placeholder.parentNode) {
+        placeholder.parentNode.replaceChild(dragging, placeholder);
+      }
+      dragging.classList.remove('cg-dragging');
+      dragging.style.display = '';
+      dragging = null;
+      placeholder = null;
+      if (typeof onEnd === 'function') onEnd();
     });
   }
 
@@ -571,6 +641,9 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
   function initTopBar() {
     const host = document.getElementById('menu');
     if (!host) return;
+
+    // 顶栏整体收起：课程选择与个人信息已合并到下方大菜单栏
+    host.classList.add('cg-topbar-hidden');
 
     function apply() {
       const nav = host.querySelector('#navbarSupportedContent');
@@ -634,10 +707,9 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
     const raw = el.getAttribute('onclick');
     if (!raw) return;
     let code = raw;
-    code = code.replace(/parent\.document\.getElementById\(/g, '__cgTop.document.getElementById(');
-    code = code.replace(/document\.getElementById\(/g, '__cgTop.document.getElementById(');
-    code = code.replace(/parent\.changetitle\(/g, '__cgTop.changetitle(');
-    code = code.replace(/(?<![.\w])changetitle\(/g, '__cgTop.changetitle(');
+    // 一次性替换，避免二次替换产生 __cgTop.__cgTop
+    code = code.replace(/(?:parent\.)?document\.getElementById\(/g, '__cgTop.document.getElementById(');
+    code = code.replace(/(?:parent\.)?changetitle\(/g, '__cgTop.changetitle(');
     el.setAttribute('onclick', code);
   }
 
@@ -1084,7 +1156,7 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
     }
     function isItemHidden(g, it) {
       const list = cfg.hiddenItems[g.label] || [];
-      return list.indexOf(it.label) !== -1 && cfg.tempItems.indexOf(g.label + ' ' + it.label) === -1;
+      return list.indexOf(it.label) !== -1 && cfg.tempItems.indexOf(g.label + '' + it.label) === -1;
     }
 
     function visibleGroups() {
@@ -1112,7 +1184,53 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
           }
         });
         normalizeCollapse(g.list);
+        markGroupRemovable(g);
+        g.items.forEach(function (it) {
+          if (!isItemHidden(g, it)) markItemRemovable(g, it);
+        });
       });
+    }
+
+    /** 分组标题右侧的移除角标：把整个分组收进「其它」 */
+    function markGroupRemovable(g) {
+      if (!g.titleEl) return;
+      const old = g.titleEl.querySelector('.cg-group-x');
+      if (old) old.remove();
+      const x = document.createElement('span');
+      x.className = 'cg-group-x';
+      x.textContent = '×';
+      x.title = '隐藏该分组';
+      x.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (cfg.hiddenGroups.indexOf(g.label) === -1) cfg.hiddenGroups.push(g.label);
+        cfg.tempGroups = cfg.tempGroups.filter(function (l) { return l !== g.label; });
+        publishConfig();
+        renderSidebar();
+        renderOther();
+      });
+      g.titleEl.appendChild(x);
+    }
+
+    /** 菜单项右侧的移除角标：把该项收进「其它」（折叠项不单独提供） */
+    function markItemRemovable(g, it) {
+      if (it.el.tagName !== 'A') return;
+      if (it.el.querySelector('.cg-temp-x')) return;
+      const x = document.createElement('span');
+      x.className = 'cg-temp-x';
+      x.textContent = '×';
+      x.title = '隐藏该菜单';
+      x.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const list = cfg.hiddenItems[g.label] || (cfg.hiddenItems[g.label] = []);
+        if (list.indexOf(it.label) === -1) list.push(it.label);
+        cfg.tempItems = cfg.tempItems.filter(function (k) { return k !== g.label + '' + it.label; });
+        publishConfig();
+        renderSidebar();
+        renderOther();
+      });
+      it.el.appendChild(x);
     }
 
     /** 保证「录入题目」折叠项与其子菜单容器相邻，避免拖动后被拆散 */
@@ -1223,7 +1341,7 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
     }
 
     function showItemTemporarily(g, it) {
-      const key = g.label + ' ' + it.label;
+      const key = g.label + '' + it.label;
       if (cfg.tempItems.indexOf(key) === -1) cfg.tempItems.push(key);
       publishConfig();
       renderSidebar();
