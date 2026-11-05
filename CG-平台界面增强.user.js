@@ -4,7 +4,7 @@
 // @version      1.0.0
 // @description  为希冀（CG）平台教师端提供界面增强：课程选择与个人信息合并到大菜单栏；大菜单与左侧菜单支持分组隐藏、拖动排序、「其它」收纳；面包屑与表格等视觉优化。所有链接与按键的功能保持原样。
 // @author       SXY
-// @match        *://*/admin/*jsp*
+// @match        http://10.18.32.229/*
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -1590,6 +1590,9 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
    * ========================================================================= */
 
   function route() {
+    // 作业批改页由专用脚本处理，此处整体跳过，避免两套样式在同一页叠加
+    if ($('input[id^="sValueEdit"]') || /assignResultDetail/i.test(location.pathname)) return;
+
     injectStyle();
     document.body.classList.add('cg-ui');
 
