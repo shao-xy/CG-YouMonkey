@@ -1,4 +1,4 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         CG 平台界面增强
 // @namespace    https://github.com/shao-xy/CG-YouMonkey
 // @version      1.0.0
@@ -243,7 +243,6 @@ body.cg-ui .cg-course-toggle.open { transform: rotate(180deg); color: var(--cg-t
 
 /* 通用浮层面板 */
 body.cg-ui .cg-panel {
-  position: absolute;
   z-index: 1200;
   min-width: 220px;
   max-width: 460px;
@@ -258,6 +257,10 @@ body.cg-ui .cg-panel {
   display: none;
 }
 body.cg-ui .cg-panel.open { display: block; animation: cg-fade .16s ease; }
+/* 局部面板：用于左侧菜单（该 iframe 足够高） */
+body.cg-ui .cg-panel-local { position: absolute; }
+/* 浮动面板：渲染在顶层窗口，避免被矮小的 iframe 裁掉 */
+body.cg-ui .cg-panel-float { position: fixed; }
 @keyframes cg-fade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 body.cg-ui .cg-panel::-webkit-scrollbar { width: 8px; }
 body.cg-ui .cg-panel::-webkit-scrollbar-thumb { background: #d8dee9; border-radius: 4px; }
@@ -317,18 +320,16 @@ body.cg-ui .cg-other-btn {
 }
 body.cg-ui .cg-other-btn:hover { background: var(--cg-t-soft); border-style: solid; }
 body.cg-ui .cg-other-wrap { position: relative; display: inline-flex; }
-body.cg-ui .cg-other-wrap .cg-panel { right: 0; top: calc(100% + 8px); }
 body.cg-ui .cg-other-wrap.open .cg-other-btn { background: var(--cg-t); color: #fff; border-color: var(--cg-t); }
 
-/* 临时项的移除角标 */
+/* 菜单项的移除角标：常驻显示，便于发现「收进其它」的入口 */
 body.cg-ui .nav-link.cg-temp-wrap { position: relative; }
 body.cg-ui .cg-temp-x {
-  display: none;
   position: absolute;
-  top: -4px; right: -2px;
+  top: -5px; right: -3px;
   width: 16px; height: 16px;
   border-radius: 50%;
-  background: #ef4444;
+  background: #dfe4ec;
   color: #fff;
   font-size: 11px;
   line-height: 15px;
@@ -336,24 +337,29 @@ body.cg-ui .cg-temp-x {
   cursor: pointer;
   border: 1.5px solid #fff;
   z-index: 5;
+  opacity: .75;
+  transition: all .14s;
 }
-body.cg-ui .nav-link.cg-temp-wrap:hover .cg-temp-x,
-body.cg-ui .sidebar .menu-item:hover .cg-temp-x { display: block; }
+body.cg-ui .nav-link:hover .cg-temp-x,
+body.cg-ui .sidebar .menu-item:hover .cg-temp-x { opacity: 1; background: #ef4444; }
+body.cg-ui .cg-temp-x:hover { background: #dc2626 !important; opacity: 1; }
 
 /* 个人信息 */
 body.cg-ui .cg-user-wrap { position: relative; margin-left: auto; flex: 0 0 auto; }
 body.cg-ui .cg-user-btn {
-  width: 34px; height: 34px;
-  border-radius: 50%;
+  height: 34px;
+  padding: 0 8px 0 9px;
+  border-radius: 999px;
   border: 1px solid var(--cg-line);
   background: #fff;
   color: var(--cg-t);
   cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
+  display: inline-flex; align-items: center; gap: 3px;
   transition: all .16s;
 }
 body.cg-ui .cg-user-btn:hover { border-color: var(--cg-t); background: var(--cg-t-soft); }
-body.cg-ui .cg-user-wrap .cg-panel { right: 0; top: calc(100% + 8px); min-width: 170px; }
+body.cg-ui .cg-user-btn .cg-user-caret { font-size: 9px; color: #9aa3b2; }
+body.cg-ui .cg-user-btn:hover .cg-user-caret { color: var(--cg-t); }
 body.cg-ui .cg-user-panel .dropdown-item {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 10px;
@@ -524,6 +530,43 @@ body.cg-ui .btn-primary { background: var(--cg-t); border-color: var(--cg-t); co
 body.cg-ui .btn-primary:hover { filter: brightness(1.08); color: #fff; }
 body.cg-ui .form-control { border-radius: 9px; border-color: #d7dde7; box-shadow: none; }
 body.cg-ui .form-control:focus { border-color: var(--cg-t); box-shadow: 0 0 0 3px var(--cg-t-soft); }
+
+/* 筛选项（如「我的班级」「我布置的作业」「最近6个月」）：改为可点击的胶囊 */
+body.cg-ui .checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 0 0;
+  padding: 5px 13px;
+  border: 1px solid var(--cg-line);
+  border-radius: 999px;
+  background: #fff;
+  color: #4b5563;
+  font-size: 13.5px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s, border-color .15s, color .15s;
+}
+/* 去掉 Bootstrap 用 :before 绘制的方框 */
+body.cg-ui .checkbox-inline:before { display: none !important; }
+/* 原生复选框保留在表单中（功能不变），仅视觉上隐藏 */
+body.cg-ui .checkbox-inline input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+body.cg-ui .checkbox-inline:hover { border-color: var(--cg-t); color: var(--cg-t); background: var(--cg-t-soft); }
+body.cg-ui .checkbox-inline:has(input:checked) {
+  background: var(--cg-t);
+  border-color: var(--cg-t);
+  color: #fff;
+}
+body.cg-ui .checkbox-inline:has(input:checked):hover { color: #fff; filter: brightness(1.08); }
+/* 平台在首个选项前插入的空占位 */
+body.cg-ui .checkbox-inline > span:empty { display: none; }
 body.cg-ui .panel { border-radius: var(--cg-r); border-color: var(--cg-line); box-shadow: var(--cg-shadow-sm); }
 body.cg-ui .modal-content { border-radius: var(--cg-r); box-shadow: 0 24px 60px rgba(16, 24, 40, .28); border: none; }
 body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
@@ -637,6 +680,80 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
   /* =========================================================================
    * 4. 顶栏（index.jsp 中的 menu.jsp 内容）
    * ========================================================================= */
+
+  /** 计算元素在顶层窗口中的位置（沿 frame 链累加偏移） */
+  function rectInTop(el) {
+    const r = el.getBoundingClientRect();
+    let x = r.left;
+    let y = r.top;
+    let win = el.ownerDocument ? el.ownerDocument.defaultView : null;
+    while (win && win.top && win !== win.top && win.parent) {
+      const frame = win.frameElement;
+      if (!frame) break;
+      const fr = frame.getBoundingClientRect();
+      x += fr.left;
+      y += fr.top;
+      win = win.parent;
+    }
+    return { left: x, top: y, width: r.width, height: r.height };
+  }
+
+  /**
+   * 顶层窗口的浮动层。
+   * 大菜单栏所在的 iframe 只有 65px 高，iframe 会裁掉超出自身范围的
+   * 内容，因此下拉面板必须渲染到顶层窗口，再按 frame 偏移定位。
+   */
+  function initFloatLayer() {
+    if (window.__cgFloat) return;
+
+    const layer = document.createElement('div');
+    layer.className = 'cg-float-layer';
+    layer.style.display = 'none';
+    document.body.appendChild(layer);
+
+    function place(anchor, panel) {
+      const r = rectInTop(anchor);
+      panel.style.left = r.left + 'px';
+      panel.style.top = (r.top + r.height + 8) + 'px';
+      panel.style.display = 'block';
+      const vw = window.innerWidth;
+      const pw = panel.offsetWidth;
+      if (r.left + pw > vw - 10) {
+        panel.style.left = Math.max(10, vw - 10 - pw) + 'px';
+      }
+    }
+
+    window.__cgFloat = {
+      layer: layer,
+      open(anchor, panel) {
+        layer.innerHTML = '';
+        layer.appendChild(panel);
+        layer.style.display = 'block';
+        place(anchor, panel);
+      },
+      place: place,
+      close() {
+        layer.style.display = 'none';
+        layer.innerHTML = '';
+      },
+      isOpen() {
+        return layer.style.display === 'block';
+      }
+    };
+
+    document.addEventListener('click', function (e) {
+      if (layer.style.display === 'block' && !layer.contains(e.target)) {
+        window.__cgFloat.close();
+      }
+    }, true);
+
+    window.addEventListener('resize', function () {
+      if (layer.style.display !== 'block') return;
+      const panel = layer.firstElementChild;
+      const anchor = panel && panel.__cgAnchor;
+      if (anchor && anchor.isConnected) place(anchor, panel);
+    });
+  }
 
   function initTopBar() {
     const host = document.getElementById('menu');
@@ -780,11 +897,48 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
     otherBtn.type = 'button';
     otherBtn.className = 'cg-other-btn';
     otherBtn.innerHTML = '其它 <i class="fas fa-chevron-down" style="font-size:10px"></i>';
+    // 面板不挂在本 iframe 内，交由顶层窗口渲染，否则会被 65px 高的视口裁掉
     const otherPanel = document.createElement('div');
-    otherPanel.className = 'cg-panel';
+    otherPanel.className = 'cg-panel cg-panel-float';
     otherWrap.appendChild(otherBtn);
-    otherWrap.appendChild(otherPanel);
     nav.appendChild(otherWrap);
+
+    /* ---------- 5.3.1 浮动面板工具 ---------- */
+    let currentFloatPanel = null;
+
+    function floatApi() {
+      const top = window.__cgTop;
+      return top && top.__cgFloat ? top.__cgFloat : null;
+    }
+
+    /** 在顶层窗口打开面板 */
+    function openFloat(anchor, panel) {
+      const api = floatApi();
+      if (!api) return false;
+      panel.__cgAnchor = anchor;
+      api.open(anchor, panel);
+      panel.classList.add('open');
+      currentFloatPanel = panel;
+      return true;
+    }
+
+    function closeFloat() {
+      const api = floatApi();
+      if (api) api.close();
+      currentFloatPanel = null;
+    }
+
+    /** 判断某个面板当前是否展开（三个入口共用同一浮动层，需区分） */
+    function isFloatOpen(panel) {
+      const api = floatApi();
+      return !!(api && api.isOpen() && currentFloatPanel === panel);
+    }
+
+    /** 重新定位已打开的面板（内容变化后宽度可能改变） */
+    function refloat(anchor, panel) {
+      const api = floatApi();
+      if (api && panel.__cgAnchor) api.place(anchor, panel);
+    }
 
     /* ---------- 5.4 渲染菜单 ---------- */
     const tabsCfg = CONFIG.tabs;
@@ -905,6 +1059,8 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
         row.addEventListener('click', function (e) {
           if (e.target === act) return;
           showTemporarily(it);
+          closeFloat();
+          otherWrap.classList.remove('open');
         });
 
         // 放出：永久固定到大菜单栏
@@ -915,6 +1071,8 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
           publishConfig();
           renderBar();
           renderOther();
+          closeFloat();
+          otherWrap.classList.remove('open');
         });
 
         otherPanel.appendChild(row);
@@ -959,16 +1117,19 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
       courseBox.appendChild(toggle);
 
       const panel = document.createElement('div');
-      panel.className = 'cg-panel';
-      panel.style.left = '0';
-      panel.style.top = 'calc(100% + 8px)';
-      courseBox.appendChild(panel);
+      panel.className = 'cg-panel cg-panel-float';
+      panel.style.minWidth = '240px';
 
       toggle.addEventListener('click', function (e) {
         e.stopPropagation();
-        const isOpen = panel.classList.toggle('open');
-        toggle.classList.toggle('open', isOpen);
-        if (isOpen && !panel.childElementCount) {
+        if (isFloatOpen(panel)) {
+          closeFloat();
+          toggle.classList.remove('open');
+          return;
+        }
+        if (!openFloat(toggle, panel)) return;
+        toggle.classList.add('open');
+        if (!panel.childElementCount) {
           const loading = document.createElement('div');
           loading.className = 'cg-panel-empty';
           loading.textContent = '加载中…';
@@ -1000,14 +1161,19 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
                 a.style.background = '';
                 a.style.color = '';
               });
+              a.addEventListener('click', function () {
+                closeFloat();
+                toggle.classList.remove('open');
+              });
             });
+            refloat(toggle, panel);
           });
         }
       });
 
       document.addEventListener('click', function (e) {
         if (!courseBox.contains(e.target)) {
-          panel.classList.remove('open');
+          closeFloat();
           toggle.classList.remove('open');
         }
       });
@@ -1027,11 +1193,11 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
         userBtn.type = 'button';
         userBtn.className = 'cg-user-btn';
         userBtn.title = '个人信息';
-        userBtn.innerHTML = '<i class="fas fa-user"></i>';
+        userBtn.innerHTML = '<i class="fas fa-user"></i><i class="fas fa-chevron-down cg-user-caret"></i>';
         const userPanel = document.createElement('div');
-        userPanel.className = 'cg-panel cg-user-panel';
+        userPanel.className = 'cg-panel cg-panel-float cg-user-panel';
+        userPanel.style.minWidth = '160px';
         userWrap.appendChild(userBtn);
-        userWrap.appendChild(userPanel);
         box.appendChild(userWrap);
 
         $$('.dropdown-item', source).forEach(function (item) {
@@ -1042,11 +1208,19 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
 
         userBtn.addEventListener('click', function (e) {
           e.stopPropagation();
-          const isOpen = userPanel.classList.toggle('open');
-          userBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+          if (isFloatOpen(userPanel)) {
+            closeFloat();
+            userBtn.setAttribute('aria-expanded', 'false');
+            return;
+          }
+          if (!openFloat(userBtn, userPanel)) return;
+          userBtn.setAttribute('aria-expanded', 'true');
         });
         document.addEventListener('click', function (e) {
-          if (!userWrap.contains(e.target)) userPanel.classList.remove('open');
+          if (!userWrap.contains(e.target)) {
+            closeFloat();
+            userBtn.setAttribute('aria-expanded', 'false');
+          }
         });
       });
     }
@@ -1054,12 +1228,18 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
     /* ---------- 5.8 「其它」按钮开关 ---------- */
     otherBtn.addEventListener('click', function (e) {
       e.stopPropagation();
-      const isOpen = otherPanel.classList.toggle('open');
-      otherWrap.classList.toggle('open', isOpen);
+      if (isFloatOpen(otherPanel)) {
+        closeFloat();
+        otherWrap.classList.remove('open');
+        return;
+      }
+      renderOther();
+      if (!openFloat(otherBtn, otherPanel)) return;
+      otherWrap.classList.add('open');
     });
     document.addEventListener('click', function (e) {
       if (!otherWrap.contains(e.target)) {
-        otherPanel.classList.remove('open');
+        closeFloat();
         otherWrap.classList.remove('open');
       }
     });
@@ -1138,7 +1318,7 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
     otherBtn.className = 'cg-other-btn';
     otherBtn.innerHTML = '其它 <i class="fas fa-chevron-down" style="font-size:10px"></i>';
     const otherPanel = document.createElement('div');
-    otherPanel.className = 'cg-panel';
+    otherPanel.className = 'cg-panel cg-panel-local';
     otherWrap.appendChild(otherBtn);
     otherWrap.appendChild(otherPanel);
     otherBar.appendChild(otherWrap);
@@ -1412,6 +1592,11 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
   function route() {
     injectStyle();
     document.body.classList.add('cg-ui');
+
+    // 顶层窗口负责承载跨 frame 的浮动面板
+    try {
+      if (window === window.top) initFloatLayer();
+    } catch (e) { /* 忽略 */ }
 
     if ($('.anjing-box ul.nav')) {
       initTabs();
