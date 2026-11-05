@@ -1590,9 +1590,6 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
    * ========================================================================= */
 
   function route() {
-    // 作业批改页由专用脚本处理，此处整体跳过，避免两套样式在同一页叠加
-    if ($('input[id^="sValueEdit"]') || /assignResultDetail/i.test(location.pathname)) return;
-
     injectStyle();
     document.body.classList.add('cg-ui');
 
