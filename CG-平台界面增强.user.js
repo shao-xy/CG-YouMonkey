@@ -1,8 +1,8 @@
 ﻿// ==UserScript==
 // @name         CG 平台界面增强
 // @namespace    https://github.com/shao-xy/CG-YouMonkey
-// @version      1.2.0
-// @description  为希冀（CG）平台教师端提供界面增强：课程选择与个人信息合并到大菜单栏；大菜单与左侧菜单支持分组隐藏、拖动排序、「其它」收纳；登录后默认定位到大菜单栏第一项；作业批改页提供吸顶得分栏、60%/80%/100% 快捷评分、小分汇总，赋分后自动跳转到下一道未批改的题目。所有链接与按键的功能保持原样。
+// @version      1.3.0
+// @description  为希冀（CG）平台教师端提供界面增强：课程选择与个人信息合并到大菜单栏；大菜单与左侧菜单支持分组隐藏、拖动排序、「其它」收纳；登录后默认定位到大菜单栏第一项；作业批改页提供吸顶得分栏、60%/80%/100% 快捷评分、小分汇总，赋分后自动跳转到下一道未批改的题目；批改弹窗把蓝色信息条合并进学生跳转控制台并重排三个跳转按钮，小题号按得分进度着色。所有链接与按键的功能保持原样。
 // @author       SXY
 // @match        http://10.18.32.229/*
 // @grant        none
@@ -1664,6 +1664,12 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
   /** 当前页面解析出的全部题目，供各处同步小分时共用 */
   let gradeQuestions = [];
 
+  /**
+   * 外层学生跳转控制台的接口。
+   * 存在时说明蓝色信息条已合并到控制台上，本页不再单独渲染吸顶栏。
+   */
+  let gradeConsoleApi = null;
+
   /** 数值保留两位小数并去掉多余的 0，例如 5.00 -> 5，4.50 -> 4.5 */
   function formatGradeScore(value) {
     const num = parseFloat(value);
@@ -1677,9 +1683,115 @@ body.cg-ui .modal-header { border-radius: var(--cg-r) var(--cg-r) 0 0; }
    */
   const GRADE_INPUT_SELECTOR = 'input[id^="sValueEdit"]';
 
+  /**
+   * 小题号的配色锚点：未批改（含 0 分）为红，60% 为橙，满分为绿。
+   * 其它得分按绝对差值在相邻锚点之间线性过渡，
+   * 因此越靠近哪个锚点，颜色越偏向该锚点（例如 50% 更偏橙）。
+   */
+  const GRADE_COLOR_STOPS = [
+    { ratio: 0, rgb: [239, 68, 68] },
+    { ratio: 0.6, rgb: [249, 115, 22] },
+    { ratio: 1, rgb: [34, 197, 94] }
+  ];
+
+  /**
+   * 依得分比例取过渡色。
+   * @param {number} ratio 得分占满分的比例（0 ~ 1）
+   * @returns {string} 形如 "r, g, b"，供 rgba(var(--x), .4) 使用
+   */
+  function gradeRatioColor(ratio) {
+    const value = Math.max(0, Math.min(1, ratio || 0));
+    for (let i = 1; i < GRADE_COLOR_STOPS.length; i++) {
+      const a = GRADE_COLOR_STOPS[i - 1];
+      const b = GRADE_COLOR_STOPS[i];
+      if (value <= b.ratio) {
+        const t = (value - a.ratio) / (b.ratio - a.ratio);
+        return [
+          Math.round(a.rgb[0] + (b.rgb[0] - a.rgb[0]) * t),
+          Math.round(a.rgb[1] + (b.rgb[1] - a.rgb[1]) * t),
+          Math.round(a.rgb[2] + (b.rgb[2] - a.rgb[2]) * t)
+        ].join(', ');
+      }
+    }
+    return GRADE_COLOR_STOPS[GRADE_COLOR_STOPS.length - 1].rgb.join(', ');
+  }
+
+  /** 该题得分占满分的比例；未批改或 0 分记为 0 */
+  function gradeQuestionRatio(question) {
+    const value = parseFloat(question.input.value);
+    if (isNaN(value) || value <= 0) return 0;
+    if (!question.maxScore || question.maxScore <= 0) return 0;
+    return Math.min(value / question.maxScore, 1);
+  }
+
   /* =========================================================================
    * 1. 样式
    * ========================================================================= */
+
+  /**
+   * 蓝色信息条与小题号胶囊的共用样式。
+   * 批改内页的吸顶栏与外层学生跳转控制台都会用到，故单独抽出共用。
+   */
+  const GRADE_BAR_STYLE_TEXT = `
+.cg-hd-student {
+  font-size: 13px;
+  opacity: .92;
+  padding-right: 12px;
+  border-right: 1px solid rgba(255, 255, 255, .28);
+}
+.cg-hd-total { display: inline-flex; align-items: baseline; gap: 6px; }
+.cg-hd-label { font-size: 12px; opacity: .85; }
+.cg-hd-score {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  font-variant-numeric: tabular-nums;
+}
+.cg-hd-progress {
+  font-size: 12px;
+  background: rgba(255, 255, 255, .16);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+.cg-hd-spacer { flex: 1 1 auto; }
+.cg-hd-back {
+  font-size: 12px;
+  opacity: .9;
+  background: rgba(255, 255, 255, .14);
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 999px;
+  padding: 3px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cg-hd-back:hover { background: rgba(255, 255, 255, .28); }
+
+/* 小题号胶囊：底色由 --cg-chip-rgb 控制 */
+.cg-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  background: rgba(var(--cg-chip-rgb, 255, 255, 255), .26);
+  border: 1px solid rgba(var(--cg-chip-rgb, 255, 255, 255), .42);
+  color: #fff;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .35s ease, border-color .35s ease, box-shadow .35s ease, transform .15s;
+}
+.cg-chip:hover {
+  background: rgba(var(--cg-chip-rgb, 255, 255, 255), .48);
+  box-shadow: 0 3px 10px rgba(var(--cg-chip-rgb, 255, 255, 255), .22);
+  transform: translateY(-1px);
+}
+.cg-chip .cg-chip-no { opacity: .85; }
+.cg-chip .cg-chip-score { font-weight: 700; font-variant-numeric: tabular-nums; }
+.cg-chip .cg-chip-max { opacity: .68; font-size: 11px; }
+`;
 
   const GRADE_STYLE_TEXT = `
 /* ---------- 主题变量 ---------- */
@@ -1722,40 +1834,7 @@ body.cg-enhanced ::-webkit-scrollbar-track { background: transparent; }
   color: #fff;
   box-shadow: 0 6px 22px rgba(15, 23, 42, .22);
 }
-.cg-hd-student {
-  font-size: 13px;
-  opacity: .92;
-  padding-right: 12px;
-  border-right: 1px solid rgba(255, 255, 255, .28);
-}
-.cg-hd-total { display: inline-flex; align-items: baseline; gap: 6px; }
-.cg-hd-label { font-size: 12px; opacity: .85; }
-.cg-hd-score {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: .5px;
-  font-variant-numeric: tabular-nums;
-}
-.cg-hd-progress {
-  font-size: 12px;
-  background: rgba(255, 255, 255, .16);
-  border-radius: 999px;
-  padding: 2px 9px;
-  white-space: nowrap;
-}
-.cg-hd-spacer { flex: 1 1 auto; }
-.cg-hd-back {
-  font-size: 12px;
-  opacity: .9;
-  background: rgba(255, 255, 255, .14);
-  border: 1px solid rgba(255, 255, 255, .2);
-  border-radius: 999px;
-  padding: 3px 11px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.cg-hd-back:hover { background: rgba(255, 255, 255, .28); }
-
+${GRADE_BAR_STYLE_TEXT}
 /* 第二行：各小题小分 */
 .cg-hd-chips {
   flex: 1 0 100%;
@@ -1766,27 +1845,6 @@ body.cg-enhanced ::-webkit-scrollbar-track { background: transparent; }
   padding-bottom: 1px;
 }
 .cg-hd-chips::-webkit-scrollbar { height: 0; }
-.cg-chip {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  background: rgba(255, 255, 255, .16);
-  border: 1px solid rgba(255, 255, 255, .22);
-  color: #fff;
-  border-radius: 999px;
-  padding: 2px 10px;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background .15s, transform .15s;
-}
-.cg-chip:hover { background: rgba(255, 255, 255, .32); transform: translateY(-1px); }
-.cg-chip .cg-chip-no { opacity: .78; }
-.cg-chip .cg-chip-score { font-weight: 700; font-variant-numeric: tabular-nums; }
-.cg-chip .cg-chip-max { opacity: .68; font-size: 11px; }
-.cg-chip.is-scored { background: rgba(16, 185, 129, .42); border-color: rgba(110, 231, 183, .55); }
-.cg-chip.is-full { background: rgba(34, 197, 94, .45); border-color: rgba(134, 239, 172, .6); }
 
 /* ---------- 题目内常驻评分条（吸顶的题目标题栏） ---------- */
 body.cg-enhanced .panel-heading.cg-sticky {
@@ -1911,6 +1969,17 @@ body.cg-enhanced .badge {
   padding: 4px 9px;
   border-radius: 999px;
 }
+/* 题号徽标：按得分进度着色（未批改红 / 六成橙 / 满分绿） */
+body.cg-enhanced .panel-title .badge {
+  background: linear-gradient(135deg,
+    rgba(var(--cg-badge-rgb, 37, 99, 235), .96),
+    rgba(var(--cg-badge-rgb, 37, 99, 235), .74));
+  border: 1px solid rgba(var(--cg-badge-rgb, 37, 99, 235), .55);
+  box-shadow: 0 2px 8px rgba(var(--cg-badge-rgb, 37, 99, 235), .3);
+  transition: background .35s ease, border-color .35s ease, box-shadow .35s ease;
+}
+/* 平台自带的“返回顶部”浮标已被吸顶信息条 / 外层控制台接管 */
+body.cg-enhanced .scrollupMarkTIP { display: none !important; }
 body.cg-enhanced .collapse.in,
 body.cg-enhanced .panel-collapse.in { overflow: visible; }
 body.cg-enhanced .page-header {
@@ -2067,6 +2136,7 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
         scoreCell: scoreCell,
         commentCell: commentCell,
         saveButton: saveButton,
+        badge: badgeEl,
         number: badgeEl ? badgeEl.textContent.trim() : '',
         title: titleText,
         maxScore: parseFloat(input.getAttribute('max')) || 0
@@ -2080,16 +2150,81 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
    * 3. 顶部常驻评分栏（第一行总分 + 第二行各小题小分）
    * ========================================================================= */
 
+  /**
+   * 批改页顶部信息（学生、总分、小题小分）的公共取值。
+   * runtimeScore 始终留在平台原位，这里只读取其文本，
+   * 以免移动节点导致平台回填总分时找不到元素。
+   */
+  function gradeStudentName() {
+    const origin = $('.scrollupMarkTIP');
+    if (!origin) return '';
+    const studentEl = origin.querySelector('small span');
+    return studentEl ? studentEl.textContent.replace(/\s+/g, ' ').trim() : '';
+  }
+
+  function gradeTotalText() {
+    const scoreSpan = document.getElementById('runtimeScore');
+    if (!scoreSpan) return '';
+    return scoreSpan.textContent.replace(/\s+/g, ' ').trim();
+  }
+
+  /** 各小题当前的题号、得分、满分与配色比例 */
+  function buildGradeChipData() {
+    return gradeQuestions.map(function (question, index) {
+      const value = parseFloat(question.input.value);
+      return {
+        index: index,
+        number: question.number || '?',
+        score: isNaN(value) ? 0 : value,
+        max: question.maxScore,
+        title: question.title || '',
+        ratio: gradeQuestionRatio(question)
+      };
+    });
+  }
+
+  /**
+   * 渲染小题号胶囊。
+   * @param {HTMLElement} container 胶囊容器
+   * @param {Array} items buildGradeChipData 的结果
+   * @param {function} onClick 点击某个胶囊时的回调
+   */
+  function renderGradeChips(container, items, onClick) {
+    container.textContent = '';
+    items.forEach(function (item) {
+      const chip = document.createElement('span');
+      chip.className = 'cg-chip';
+      chip.style.setProperty('--cg-chip-rgb', gradeRatioColor(item.ratio));
+      chip.title = (item.title || ('第 ' + item.number + ' 题')) + '：' +
+        formatGradeScore(item.score) + ' / ' + formatGradeScore(item.max) + ' 分';
+
+      const no = document.createElement('span');
+      no.className = 'cg-chip-no';
+      no.textContent = item.number || '?';
+
+      const score = document.createElement('span');
+      score.className = 'cg-chip-score';
+      score.textContent = formatGradeScore(item.score);
+
+      const max = document.createElement('span');
+      max.className = 'cg-chip-max';
+      max.textContent = '/' + formatGradeScore(item.max);
+
+      chip.appendChild(no);
+      chip.appendChild(score);
+      chip.appendChild(max);
+      chip.addEventListener('click', function () {
+        onClick(item);
+      });
+
+      container.appendChild(chip);
+    });
+  }
+
   function buildGradeHeader() {
     const origin = $('.scrollupMarkTIP');
     const scoreSpan = document.getElementById('runtimeScore');
     if (!origin && !scoreSpan) return null;
-
-    let studentText = '';
-    if (origin) {
-      const studentEl = origin.querySelector('small span');
-      if (studentEl) studentText = studentEl.textContent.replace(/\s+/g, ' ').trim();
-    }
 
     const header = document.createElement('div');
     header.id = 'cg-grade-header';
@@ -2097,18 +2232,18 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
 
     const student = document.createElement('span');
     student.className = 'cg-hd-student';
-    student.textContent = studentText;
+    student.textContent = gradeStudentName();
 
     const total = document.createElement('span');
     total.className = 'cg-hd-total';
     const totalLabel = document.createElement('span');
     totalLabel.className = 'cg-hd-label';
     totalLabel.textContent = '总分';
+    const totalScore = document.createElement('span');
+    totalScore.className = 'cg-hd-score';
+    totalScore.id = 'cg-hd-score';
     total.appendChild(totalLabel);
-    if (scoreSpan) {
-      scoreSpan.className = 'cg-hd-score';
-      total.appendChild(scoreSpan);
-    }
+    total.appendChild(totalScore);
 
     const progress = document.createElement('span');
     progress.className = 'cg-hd-progress';
@@ -2136,12 +2271,8 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
     header.appendChild(back);
     header.appendChild(chips);
 
-    if (origin && origin.parentNode) {
-      // 原“返回顶部”浮标被替换为常驻评分栏，其中已接管原有的 runtimeScore 节点
-      origin.parentNode.replaceChild(header, origin);
-    } else {
-      (document.body || document.documentElement).appendChild(header);
-    }
+    // 平台自带的浮标只隐藏不删除：其中的 runtimeScore 仍需留在文档中供平台回填
+    (document.body || document.documentElement).appendChild(header);
     return header;
   }
 
@@ -2298,52 +2429,50 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
   }
 
   /* =========================================================================
-   * 5. 各小题小分同步到顶部栏第二行
+   * 5. 各小题小分同步到顶部栏第二行（合并模式下改为推送外层控制台）
    * ========================================================================= */
 
+  /** 题号徽标按得分进度着色 */
+  function applyQuestionColors() {
+    gradeQuestions.forEach(function (question) {
+      if (!question.badge) return;
+      question.badge.style.setProperty('--cg-badge-rgb', gradeRatioColor(gradeQuestionRatio(question)));
+    });
+  }
+
   function refreshGradeChips() {
+    if (!gradeQuestions.length) return;
+
+    const items = buildGradeChipData();
+    applyQuestionColors();
+
+    // 已合并到外层学生跳转控制台时，信息统一交给控制台渲染
+    if (gradeConsoleApi) {
+      gradeConsoleApi.update({
+        student: gradeStudentName(),
+        total: gradeTotalText(),
+        scored: items.filter(function (item) { return item.score > 0; }).length,
+        count: items.length,
+        chips: items
+      });
+      return;
+    }
+
     const chips = document.getElementById('cg-hd-chips');
     const progress = document.getElementById('cg-hd-progress');
-    if (!chips || !gradeQuestions.length) return;
+    if (!chips) return;
 
-    chips.textContent = '';
-    let scored = 0;
-
-    gradeQuestions.forEach(function (question) {
-      const current = parseFloat(question.input.value) || 0;
-      if (current > 0) scored++;
-
-      const chip = document.createElement('span');
-      chip.className = 'cg-chip';
-      if (current > 0) chip.classList.add('is-scored');
-      if (question.maxScore > 0 && current >= question.maxScore) chip.classList.add('is-full');
-      chip.title = (question.title || '第 ' + question.number + ' 题') + '：' +
-        formatGradeScore(current) + ' / ' + formatGradeScore(question.maxScore) + ' 分';
-
-      const no = document.createElement('span');
-      no.className = 'cg-chip-no';
-      no.textContent = question.number || '?';
-
-      const score = document.createElement('span');
-      score.className = 'cg-chip-score';
-      score.textContent = formatGradeScore(current);
-
-      const max = document.createElement('span');
-      max.className = 'cg-chip-max';
-      max.textContent = '/' + formatGradeScore(question.maxScore);
-
-      chip.appendChild(no);
-      chip.appendChild(score);
-      chip.appendChild(max);
-      chip.addEventListener('click', function () {
-        scrollToGradeQuestion(question);
-      });
-
-      chips.appendChild(chip);
+    renderGradeChips(chips, items, function (item) {
+      const question = gradeQuestions[item.index];
+      if (question) scrollToGradeQuestion(question);
     });
 
+    const score = document.getElementById('cg-hd-score');
+    if (score) score.textContent = gradeTotalText() || '0';
+
     if (progress) {
-      progress.textContent = '已评 ' + scored + '/' + gradeQuestions.length;
+      const scored = items.filter(function (item) { return item.score > 0; }).length;
+      progress.textContent = '已评 ' + scored + '/' + items.length;
     }
   }
 
@@ -2354,6 +2483,12 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
     const top = question.panel.getBoundingClientRect().top + window.pageYOffset - headerHeight - 16;
     window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' });
   }
+
+  /** 供外层控制台的小题号胶囊调用：跳转到本页对应题目 */
+  window.__cgScrollToQuestion = function (index) {
+    const question = gradeQuestions[index];
+    if (question) scrollToGradeQuestion(question);
+  };
 
   /* =========================================================================
    * 6. 版式整理
@@ -2389,8 +2524,17 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
       return;
     }
 
-    buildGradeHeader();
-    document.body.classList.add('cg-has-header');
+    // 供外层控制台主动拉取一次当前数据
+    window.__cgGradeData = refreshGradeChips;
+
+    // 外层已有学生跳转控制台时，蓝色信息条由控制台承载，本页不再单独渲染
+    if (connectParentConsole()) {
+      document.body.classList.add('cg-merged-console');
+      document.body.style.setProperty('--cg-header-h', '0px');
+    } else {
+      buildGradeHeader();
+      document.body.classList.add('cg-has-header');
+    }
 
     gradeQuestions.forEach(function (question) {
       tidyGradeLayout(question);
@@ -2410,15 +2554,49 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
       if (header) new ResizeObserver(syncGradeHeaderHeight).observe(header);
     }
 
-    // 总分由服务端异步回填，回填后同步一次顶部栏高度
+    // 总分由服务端异步回填，回填后同步一次总分与顶部栏高度
     const scoreSpan = document.getElementById('runtimeScore');
     if (scoreSpan && typeof MutationObserver === 'function') {
-      new MutationObserver(syncGradeHeaderHeight).observe(scoreSpan, {
+      new MutationObserver(function () {
+        syncGradeHeaderHeight();
+        refreshGradeChips();
+      }).observe(scoreSpan, {
         childList: true,
         characterData: true,
         subtree: true
       });
     }
+  }
+
+  /**
+   * 尝试连接外层学生跳转控制台。
+   * 控制台可能晚于本页加载完成（例如批改弹窗异步载入），故失败时稍后重试。
+   * @param {number} [tries] 已重试次数
+   */
+  function connectParentConsole(tries) {
+    if (gradeConsoleApi) return true;
+    let api = null;
+    try {
+      if (window.parent && window.parent !== window) {
+        const candidate = window.parent.__cgConsole;
+        if (candidate && typeof candidate.update === 'function') api = candidate;
+      }
+    } catch (e) { /* 跨域时忽略 */ }
+    if (api) {
+      gradeConsoleApi = api;
+      // 控制台就绪，撤下本页单独的吸顶栏，改为把信息推给控制台
+      const header = document.getElementById('cg-grade-header');
+      if (header && header.parentNode) header.parentNode.removeChild(header);
+      document.body.classList.remove('cg-has-header');
+      document.body.classList.add('cg-merged-console');
+      document.body.style.setProperty('--cg-header-h', '0px');
+      refreshGradeChips();
+      return true;
+    }
+    const attempt = tries || 0;
+    if (attempt > 40) return false;
+    setTimeout(function () { connectParentConsole(attempt + 1); }, 250);
+    return false;
   }
 
   /** 是否为作业批改页（含外层批改窗口） */
@@ -2432,13 +2610,337 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
   }
 
   /* =========================================================================
-   * 8. 入口
+   * 8. 批改外层控制台（把蓝色信息条合并到学生跳转控制台）
+   * ========================================================================= */
+
+  const CONSOLE_STYLE_TEXT = `
+/* 合并后的蓝色条：承载学生、总分、小题小分与跳转按钮 */
+body.cg-mark-console .cg-console-host {
+  background: linear-gradient(100deg, #1e3a8a 0%, #2563eb 46%, #38bdf8 128%);
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+  padding: 7px 18px;
+  color: #fff;
+  box-shadow: 0 6px 22px rgba(15, 23, 42, .22);
+}
+/* 弹窗标题栏右上角有关闭按钮，右侧留出位置避免重叠 */
+body.cg-mark-console .cg-console-modal { padding-right: 54px; }
+body.cg-mark-console .well.cg-console-host { margin: 0 -15px; }
+body.cg-mark-console .cg-console-host .close { color: #fff; opacity: .85; }
+.cg-console {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  width: 100%;
+}
+.cg-console-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.cg-console-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+/* 跳转按钮：与蓝色底色形成明显区分，且三个按钮宽高一致 */
+.cg-console-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 116px;
+  height: 30px;
+  margin: 0;
+  padding: 0 10px;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, .8);
+  background: rgba(255, 255, 255, .94);
+  color: #1d4ed8;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .2);
+  transition: background .16s, color .16s, box-shadow .16s, transform .1s;
+}
+.cg-console-btn:hover {
+  background: #fff;
+  color: #1e40af;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, .28);
+}
+.cg-console-btn:active { transform: translateY(1px); }
+.cg-console-btn:disabled,
+.cg-console-btn.disabled {
+  background: rgba(255, 255, 255, .34);
+  border-color: rgba(255, 255, 255, .32);
+  color: rgba(255, 255, 255, .78);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+.cg-console-btn.is-open {
+  background: #16a34a;
+  border-color: rgba(255, 255, 255, .45);
+  color: #fff;
+}
+.cg-console-btn.is-open:hover { background: #15803d; color: #fff; }
+.cg-console-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, .16);
+  border: 1px solid rgba(255, 255, 255, .26);
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .16s;
+}
+.cg-console-top:hover { background: rgba(255, 255, 255, .32); }
+/* 第二行：各小题小分 */
+.cg-console-chips {
+  flex: 1 0 100%;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 1px;
+}
+.cg-console-chips::-webkit-scrollbar { height: 0; }
+` + GRADE_BAR_STYLE_TEXT;
+
+  function injectConsoleStyle() {
+    if (document.getElementById('cg-console-style')) return;
+    const style = document.createElement('style');
+    style.id = 'cg-console-style';
+    style.textContent = CONSOLE_STYLE_TEXT;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  /** 承载批改内容的内嵌窗口（弹窗与新窗口页的 id/name 写法不一） */
+  function findMarkFrame() {
+    return document.getElementById('markFrame') ||
+      document.querySelector('iframe[name="markFrame"]');
+  }
+
+  /** 当前文档是否承载学生跳转控制台（批改弹窗或新窗口批改页） */
+  function isMarkConsolePage() {
+    try {
+      const path = location.pathname || '';
+      if (/assignResult\.jsp/i.test(path)) return true;
+      if (/assignResultDetail_win\.jsp/i.test(path)) return true;
+    } catch (e) { /* 忽略 */ }
+    return !!findMarkFrame();
+  }
+
+  /** 找到承载学生跳转按钮的容器 */
+  function findMarkConsoleHost() {
+    const prevBtn = document.getElementById('prevMarkButton');
+    const nextBtn = document.getElementById('nextMarkButton');
+    if (!prevBtn || !nextBtn) return null;
+
+    const modalHeader = prevBtn.closest('.modal-header');
+    if (modalHeader) {
+      return { prevBtn: prevBtn, nextBtn: nextBtn, host: modalHeader, isModal: true };
+    }
+    const well = prevBtn.closest('.well');
+    if (well) {
+      return { prevBtn: prevBtn, nextBtn: nextBtn, host: well, isModal: false };
+    }
+    return null;
+  }
+
+  /** 改写按钮文案，保留原有图标 */
+  function renameMarkButton(btn, from, to) {
+    if (!btn) return;
+    Array.prototype.slice.call(btn.childNodes).forEach(function (node) {
+      if (node.nodeType === 3 && node.nodeValue.indexOf(from) !== -1) {
+        node.nodeValue = node.nodeValue.replace(from, to);
+      }
+    });
+  }
+
+  /** 把控制台改造成合并后的蓝色条 */
+  function buildMarkConsole(found) {
+    if (!found) return false;
+    const host = found.host;
+    if (!host || host.classList.contains('cg-console-host')) return false;
+
+    const openBtn = host.querySelector('button[onclick*="openInNewWindow"]');
+
+    renameMarkButton(found.prevBtn, '评阅前一个', '前一个');
+    renameMarkButton(found.nextBtn, '评阅下一个', '后一个');
+
+    const bar = document.createElement('div');
+    bar.className = 'cg-console';
+
+    const info = document.createElement('div');
+    info.className = 'cg-console-info';
+
+    const student = document.createElement('span');
+    student.className = 'cg-hd-student';
+    student.id = 'cg-console-student';
+
+    const total = document.createElement('span');
+    total.className = 'cg-hd-total';
+    const totalLabel = document.createElement('span');
+    totalLabel.className = 'cg-hd-label';
+    totalLabel.textContent = '总分';
+    const totalScore = document.createElement('span');
+    totalScore.className = 'cg-hd-score';
+    totalScore.id = 'cg-console-score';
+    total.appendChild(totalLabel);
+    total.appendChild(totalScore);
+
+    const progress = document.createElement('span');
+    progress.className = 'cg-hd-progress';
+    progress.id = 'cg-console-progress';
+
+    info.appendChild(student);
+    info.appendChild(total);
+    info.appendChild(progress);
+
+    // 返回顶部：批改内容在内嵌窗口中，滚动的是该窗口
+    const top = document.createElement('button');
+    top.type = 'button';
+    top.className = 'cg-console-top';
+    top.innerHTML = '<span class="glyphicon glyphicon-chevron-up" aria-hidden="true"></span> 返回顶部';
+    top.addEventListener('click', function () {
+      scrollMarkFrameTo(0);
+    });
+    info.appendChild(top);
+
+    const nav = document.createElement('div');
+    nav.className = 'cg-console-nav';
+
+    const buttons = [found.prevBtn, found.nextBtn, openBtn];
+    buttons.forEach(function (btn) {
+      if (!btn) return;
+      btn.classList.add('cg-console-btn');
+      if (btn === openBtn) btn.classList.add('is-open');
+      if (btn === found.prevBtn) btn.title = '评阅上一位学生的作业';
+      if (btn === found.nextBtn) btn.title = '评阅下一位学生的作业';
+      if (btn === openBtn) btn.title = '在新窗口中打开当前学生的批改页';
+      nav.appendChild(btn);
+    });
+
+    const chips = document.createElement('div');
+    chips.className = 'cg-console-chips';
+    chips.id = 'cg-console-chips';
+
+    bar.appendChild(info);
+    bar.appendChild(nav);
+    bar.appendChild(chips);
+
+    // 保留弹窗右上角的关闭按钮，其余内容替换为合并后的蓝色条
+    const closeBtn = host.querySelector('.close');
+    host.textContent = '';
+    host.classList.add('cg-console-host');
+    if (found.isModal) host.classList.add('cg-console-modal');
+    host.appendChild(bar);
+    if (closeBtn) host.appendChild(closeBtn);
+    return true;
+  }
+
+  /** 滚动批改内容所在的内嵌窗口 */
+  function scrollMarkFrameTo(top) {
+    try {
+      const frame = findMarkFrame();
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.scrollTo({ top: top, behavior: 'smooth' });
+        return;
+      }
+    } catch (e) { /* 忽略 */ }
+    window.scrollTo({ top: top, behavior: 'smooth' });
+  }
+
+  /** 用批改内页推送的数据刷新控制台 */
+  function renderConsoleData(data) {
+    const student = document.getElementById('cg-console-student');
+    if (student) student.textContent = data.student || '';
+
+    const score = document.getElementById('cg-console-score');
+    if (score) score.textContent = data.total || '0';
+
+    const progress = document.getElementById('cg-console-progress');
+    if (progress) progress.textContent = '已评 ' + data.scored + '/' + data.count;
+
+    const chips = document.getElementById('cg-console-chips');
+    if (!chips) return;
+    renderGradeChips(chips, data.chips || [], function (item) {
+      try {
+        const frame = findMarkFrame();
+        if (frame && frame.contentWindow &&
+            typeof frame.contentWindow.__cgScrollToQuestion === 'function') {
+          frame.contentWindow.__cgScrollToQuestion(item.index);
+        }
+      } catch (e) { /* 忽略 */ }
+    });
+  }
+
+  /** 批改内页就绪后主动向控制台补一次数据 */
+  function requestConsoleData() {
+    try {
+      const frame = findMarkFrame();
+      if (frame && frame.contentWindow &&
+          typeof frame.contentWindow.__cgGradeData === 'function') {
+        frame.contentWindow.__cgGradeData();
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function initMarkConsole() {
+    injectConsoleStyle();
+    document.body.classList.add('cg-mark-console');
+
+    if (!buildMarkConsole(findMarkConsoleHost())) {
+      // 批改弹窗由页面异步载入，稍后再试
+      if (typeof MutationObserver === 'function') {
+        const observer = new MutationObserver(function () {
+          if (buildMarkConsole(findMarkConsoleHost())) {
+            observer.disconnect();
+            requestConsoleData();
+          }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+      let tries = 0;
+      const timer = setInterval(function () {
+        tries++;
+        if (buildMarkConsole(findMarkConsoleHost()) || tries > 40) {
+          clearInterval(timer);
+          requestConsoleData();
+        }
+      }, 500);
+      return;
+    }
+    requestConsoleData();
+  }
+
+  /** 供批改内页调用：把学生、总分与小题小分推送到控制台 */
+  window.__cgConsole = {
+    update: function (data) {
+      renderConsoleData(data);
+    }
+  };
+
+  /* =========================================================================
+   * 9. 入口
    * ========================================================================= */
 
   function route() {
     // 作业批改页由批改模块独立处理
     if (isGradePage()) {
       initGradePage();
+      // 批改弹窗 / 新窗口批改页：蓝色信息条合并到学生跳转控制台
+      if (isMarkConsolePage()) initMarkConsole();
       return;
     }
 
@@ -2459,6 +2961,9 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
     } else {
       initContent();
     }
+
+    // 批改弹窗 / 新窗口批改页：蓝色信息条合并到学生跳转控制台
+    if (isMarkConsolePage()) initMarkConsole();
   }
 
   if (document.readyState === 'loading') {
