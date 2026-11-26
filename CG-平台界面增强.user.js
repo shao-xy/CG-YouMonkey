@@ -1,8 +1,8 @@
 ﻿// ==UserScript==
 // @name         CG 平台界面增强
 // @namespace    https://github.com/shao-xy/CG-YouMonkey
-// @version      1.1.0
-// @description  为希冀（CG）平台教师端提供界面增强：课程选择与个人信息合并到大菜单栏；大菜单与左侧菜单支持分组隐藏、拖动排序、「其它」收纳；登录后默认定位到大菜单栏第一项；作业批改页提供吸顶得分栏、60%/80%/100% 快捷评分与小分汇总。所有链接与按键的功能保持原样。
+// @version      1.2.0
+// @description  为希冀（CG）平台教师端提供界面增强：课程选择与个人信息合并到大菜单栏；大菜单与左侧菜单支持分组隐藏、拖动排序、「其它」收纳；登录后默认定位到大菜单栏第一项；作业批改页提供吸顶得分栏、60%/80%/100% 快捷评分、小分汇总，赋分后自动跳转到下一道未批改的题目。所有链接与按键的功能保持原样。
 // @author       SXY
 // @match        http://10.18.32.229/*
 // @grant        none
@@ -2051,12 +2051,22 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
       const row = scoreCell ? scoreCell.closest('.row') : null;
       const commentCell = row ? row.querySelector('.col-sm-7') : null;
 
+      // 赋分表单里的「保存」按钮（评分保存；评语保存位于另一个表单中）
+      let saveButton = null;
+      $$('button', form).forEach(function (btn) {
+        if (saveButton) return;
+        const inline = btn.getAttribute('onclick') || '';
+        if (/saveScore/.test(inline)) saveButton = btn;
+      });
+      if (!saveButton) saveButton = form.querySelector('button');
+
       list.push({
         problemID: problemID,
         input: input,
         panel: panel,
         scoreCell: scoreCell,
         commentCell: commentCell,
+        saveButton: saveButton,
         number: badgeEl ? badgeEl.textContent.trim() : '',
         title: titleText,
         maxScore: parseFloat(input.getAttribute('max')) || 0
@@ -2196,6 +2206,17 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
       heading.appendChild(toggle);
     }
 
+    // 赋分「保存」按钮：保存后自动跳到下一道未批改的题目
+    if (question.saveButton) {
+      question.saveButton.addEventListener('click', function () {
+        // 原生 onclick（saveScore）先执行，随后按当前分值判断下一题
+        setTimeout(function () {
+          refreshGradeChips();
+          jumpToNextUngraded(question);
+        }, 0);
+      });
+    }
+
     return heading;
   }
 
@@ -2221,6 +2242,7 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
       try {
         window.saveScore(question.problemID, '2', question.maxScore);
         refreshGradeChips();
+        jumpToNextUngraded(question);
         return;
       } catch (e) {
         // 回退到事件触发方式
@@ -2232,6 +2254,47 @@ body.cg-enhanced .modal-header .close { color: #fff; opacity: .85; }
     input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
 
     refreshGradeChips();
+    jumpToNextUngraded(question);
+  }
+
+  /* =========================================================================
+   * 5.1 赋分后自动跳转到下一道未批改的题目
+   * ========================================================================= */
+
+  /**
+   * 该题是否已批改。
+   * 平台把得分回填在输入框的 value 中（未批改时为 0），
+   * 因此以「得分大于 0」作为已批改的判据，与顶部「已评 x/y」口径一致。
+   */
+  function isGradeQuestionGraded(question) {
+    const value = parseFloat(question.input.value);
+    return !isNaN(value) && value > 0;
+  }
+
+  /**
+   * 查找当前题目之后第一道未批改的题目。
+   * 只向后查找，绝不回到之前的题目；若后面已全部批改则返回 null。
+   */
+  function findNextUngradedQuestion(question) {
+    const index = gradeQuestions.indexOf(question);
+    if (index === -1) return null;
+    for (let i = index + 1; i < gradeQuestions.length; i++) {
+      if (!isGradeQuestionGraded(gradeQuestions[i])) return gradeQuestions[i];
+    }
+    return null;
+  }
+
+  /** 赋分后跳到下一道未批改的题目；后面没有未批改题目时保持不动 */
+  function jumpToNextUngraded(question) {
+    const next = findNextUngradedQuestion(question);
+    if (!next) return;
+    // 让光标落在下一题的得分输入框，便于直接继续录入
+    try {
+      next.input.focus({ preventScroll: true });
+    } catch (e) {
+      try { next.input.focus(); } catch (e2) { /* 忽略 */ }
+    }
+    scrollToGradeQuestion(next);
   }
 
   /* =========================================================================
